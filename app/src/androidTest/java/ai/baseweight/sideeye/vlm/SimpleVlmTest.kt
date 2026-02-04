@@ -1,5 +1,7 @@
 package ai.baseweight.sideeye.vlm
 
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.util.Log
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -71,6 +73,14 @@ class SimpleVlmTest {
         }
         Log.i(TAG, "Found test image: ${testImage.absolutePath}")
 
+        // 2. Resize to 448x448 (NPU requirement?)
+        val processedImage = File(context.getExternalFilesDir(null), "test_448.jpg")
+        if (!resizeImage(testImage, processedImage, 448)) {
+            Log.e(TAG, "ERROR: Failed to resize image")
+            return@runBlocking
+        }
+        Log.i(TAG, "Resized image to 448x448: ${processedImage.absolutePath}")
+
         // 3. Check model is downloaded
         if (!downloader.isModelDownloaded(ModelDownloader.OMNINEURAL_MODEL_ID)) {
             Log.e(TAG, "ERROR: OmniNeural model not downloaded")
@@ -124,7 +134,7 @@ class SimpleVlmTest {
 
         // 5. Build prompt with image (matching Python SDK pattern)
         val prompt = "Describe this image in detail."
-        val imagePath = testImage.absolutePath
+        val imagePath = processedImage.absolutePath
 
         Log.i(TAG, "Prompt: $prompt")
         Log.i(TAG, "Image path: $imagePath")
@@ -208,5 +218,24 @@ class SimpleVlmTest {
             Log.i(TAG, "Tokens/sec: ${tokenCount * 1000.0 / totalTime}")
         }
         Log.i(TAG, "===========================================")
+
+        // Cleanup
+        processedImage.delete()
+    }
+
+    private fun resizeImage(source: File, dest: File, size: Int): Boolean {
+        return try {
+            val bitmap = BitmapFactory.decodeFile(source.absolutePath) ?: return false
+            val resized = Bitmap.createScaledBitmap(bitmap, size, size, true)
+            FileOutputStream(dest).use { out ->
+                resized.compress(Bitmap.CompressFormat.JPEG, 95, out)
+            }
+            if (resized != bitmap) bitmap.recycle()
+            resized.recycle()
+            true
+        } catch (e: Exception) {
+            Log.e(TAG, "Resize failed", e)
+            false
+        }
     }
 }

@@ -41,18 +41,19 @@ class OmniNeuralBenchmark {
         private const val TAG = "OmniNeuralBenchmark"
         private const val MODEL_NAME = "omni-neural"
 
-        // Same prompt as Python benchmark - with <image> token for VLM
-        private const val PROMPT = """<image>
-You are a content moderation system. Classify this image.
+        // Simple classification prompt
+        private const val PROMPT = """Classify this image. Pick ONE category:
 
-FLAG if it contains:
-- Sexual: Sex toys, explicit content, pornography
-- Nudity: Visible breasts or genitals (including medical/art contexts)
-- Suggestive: Revealing clothing, provocative poses, swimwear, exposed skin
-- Drugs: Cannabis, paraphernalia
-- Embarrassing: Visibly intoxicated/drunk people, vomiting, passed out, people in humiliating or compromising situations
+0 = Safe (nothing inappropriate)
+1 = Nudity (visible breasts, genitals, buttocks)
+2 = Suggestive (bikinis, swimwear, revealing clothing)
+3 = Drugs (cannabis, marijuana, drug paraphernalia)
+4 = Embarrassing (drunk person, vomiting)
 
-Respond ONLY with JSON: {"flag": true, "reason": "Nudity"} or {"flag": false, "reason": null}"""
+First briefly describe what you see, then respond with the number.
+Format: "I see [description]. Category: [number]"
+Example: "I see a beach sunset. Category: 0"
+Example: "I see cannabis on a scale. Category: 3" """
 
         private val VALID_REASONS = setOf("Sexual", "Nudity", "Suggestive", "Drugs", "Embarrassing")
     }
@@ -196,18 +197,21 @@ Respond ONLY with JSON: {"flag": true, "reason": "Nudity"} or {"flag": false, "r
         Log.i(TAG, formattedText)
         Log.i(TAG, "=== FULL FORMATTED TEXT END ===")
 
-        // Create config with media paths injected
-        val baseConfig = GenerationConfig(maxTokens = 256)
-        val configWithMedia = wrapper.injectMediaPathsToConfig(chatArray, baseConfig)
-        Log.i(TAG, "Config imagePaths: ${configWithMedia.imagePaths?.joinToString()}")
-        Log.i(TAG, "Config imageCount: ${configWithMedia.imageCount}")
+        // Create config with image_paths directly (like Python SDK)
+        val genConfig = GenerationConfig(
+            maxTokens = 256,
+            imagePaths = arrayOf(imagePath),
+            imageCount = 1
+        )
+        Log.i(TAG, "Config imagePaths: ${genConfig.imagePaths?.joinToString()}")
+        Log.i(TAG, "Config imageCount: ${genConfig.imageCount}")
 
         val responseBuilder = StringBuilder()
         var firstTokenTime: Long? = null
         var tokenCount = 0
         val startTime = System.currentTimeMillis()
 
-        wrapper.generateStreamFlow(formattedText, configWithMedia).collect { result ->
+        wrapper.generateStreamFlow(formattedText, genConfig).collect { result ->
             when (result) {
                 is LlmStreamResult.Token -> {
                     if (firstTokenTime == null) {
@@ -237,29 +241,51 @@ Respond ONLY with JSON: {"flag": true, "reason": "Nudity"} or {"flag": false, "r
             tokensPerSecond = tps
         )
 
+        // Clear any pending state
+        wrapper.stopStream()
+
         Pair(responseBuilder.toString(), metrics)
     }
 
     private fun parseResponse(response: String): Pair<Boolean, String?> {
-        val jsonRegex = """\{[^}]+\}""".toRegex()
-        val match = jsonRegex.find(response) ?: return Pair(false, null)
+        // Look for "Category: X" pattern
+        val categoryRegex = """Category:\s*(\d)""".toRegex(RegexOption.IGNORE_CASE)
+        val match = categoryRegex.find(response)
 
-        return try {
-            val json = JSONObject(match.value)
-            val flag = when (val f = json.opt("flag")) {
-                is Boolean -> f
-                is String -> f.lowercase() in listOf("true", "yes", "1")
-                else -> false
+        if (match != null) {
+            val category = match.groupValues[1].toIntOrNull() ?: 0
+            return when (category) {
+                0 -> Pair(false, null)  // Safe
+                1 -> Pair(true, "Nudity")
+                2 -> Pair(true, "Suggestive")
+                3 -> Pair(true, "Drugs")
+                4 -> Pair(true, "Embarrassing")
+                else -> Pair(false, null)
             }
-            var reason = json.optString("reason", null)
-            if (reason != null && reason !in VALID_REASONS) {
-                reason = null
-            }
-            Pair(flag, reason)
-        } catch (e: Exception) {
-            Log.w(TAG, "Failed to parse response: $response", e)
-            Pair(false, null)
         }
+
+        // Fallback: try JSON parsing
+        val jsonRegex = """\{[^}]+\}""".toRegex()
+        val jsonMatch = jsonRegex.find(response)
+        if (jsonMatch != null) {
+            try {
+                val json = JSONObject(jsonMatch.value)
+                val flag = when (val f = json.opt("flag")) {
+                    is Boolean -> f
+                    is String -> f.lowercase() in listOf("true", "yes", "1")
+                    else -> false
+                }
+                var reason = json.optString("reason", null)
+                if (reason != null && reason !in VALID_REASONS) {
+                    reason = null
+                }
+                return Pair(flag, reason)
+            } catch (e: Exception) {
+                Log.w(TAG, "Failed to parse JSON: $response", e)
+            }
+        }
+
+        return Pair(false, null)
     }
 
     @Test
@@ -323,12 +349,22 @@ Respond ONLY with JSON: {"flag": true, "reason": "Nudity"} or {"flag": false, "r
             val item = imagesArray.getJSONObject(i)
             val filename = item.getString("filename")
             val gtFlag = item.getBoolean("should_flag")
-            val gtReason = item.optString("flag_reason", null)
+            val gtReason = if (item.isNull("flag_reason")) null else item.optString("flag_reason")
 
             val imageFile = File(testDir, filename)
             if (!imageFile.exists()) {
                 Log.w(TAG, "[${ i + 1}/${imagesArray.length()}] SKIP $filename (not found)")
                 continue
+            }
+
+            // Reinitialize model every 4 images to avoid NPU crashes
+            if (i > 0 && i % 4 == 0) {
+                Log.i(TAG, "Reinitializing model after $i images...")
+                releaseModel()
+                if (!initializeModel()) {
+                    Log.e(TAG, "Failed to reinitialize model")
+                    break
+                }
             }
 
             // Convert to JPG for NPU compatibility
@@ -587,6 +623,124 @@ Respond ONLY with JSON: {"flag": true, "reason": "Nudity"} or {"flag": false, "r
         }
 
         Log.i(TAG, "=== Quick Test Complete ===")
+    }
+
+    /**
+     * Open-ended test to see what the model actually "sees" in images.
+     * Uses a simple description prompt instead of classification.
+     */
+    @Test
+    fun describeImagesTest(): Unit = runBlocking {
+        Log.i(TAG, "=== Describe Images Test (5 images) ===")
+
+        if (!testDir.exists()) {
+            Log.e(TAG, "Test directory not found")
+            return@runBlocking
+        }
+
+        val classificationsFile = File(testDir, "classifications.json")
+        if (!classificationsFile.exists()) {
+            Log.e(TAG, "classifications.json not found")
+            return@runBlocking
+        }
+
+        val classificationsJson = JSONObject(classificationsFile.readText())
+        val imagesArray = classificationsJson.getJSONArray("images")
+
+        if (!initializeModel()) {
+            Log.e(TAG, "Failed to initialize model")
+            return@runBlocking
+        }
+
+        // Test first 5 images with open-ended description
+        val testCount = minOf(5, imagesArray.length())
+        for (i in 0 until testCount) {
+            val item = imagesArray.getJSONObject(i)
+            val filename = item.getString("filename")
+            val gtFlag = item.getBoolean("should_flag")
+            val gtReason = if (item.isNull("flag_reason")) null else item.optString("flag_reason")
+
+            val imageFile = File(testDir, filename)
+            if (!imageFile.exists()) continue
+
+            // Convert to JPG for NPU compatibility
+            val tempFile = File(tempImageDir, "temp_${System.currentTimeMillis()}.jpg")
+            if (!convertToJpg(imageFile, tempFile)) {
+                Log.e(TAG, "Failed to convert $filename")
+                continue
+            }
+
+            try {
+                val (response, metrics) = runOpenEndedInference(tempFile.absolutePath)
+
+                Log.i(TAG, "")
+                Log.i(TAG, "========================================")
+                Log.i(TAG, "[$filename]")
+                Log.i(TAG, "Ground truth: flag=$gtFlag, reason=$gtReason")
+                Log.i(TAG, "Time: ${metrics.totalInferenceTimeMs}ms, TTFT: ${metrics.timeToFirstTokenMs}ms")
+                Log.i(TAG, "Tokens: ${metrics.totalTokens}, TPS: ${metrics.tokensPerSecond.format(1)}")
+                Log.i(TAG, "--- MODEL DESCRIPTION ---")
+                Log.i(TAG, response)
+                Log.i(TAG, "--- END DESCRIPTION ---")
+            } finally {
+                tempFile.delete()
+            }
+        }
+
+        Log.i(TAG, "=== Describe Images Test Complete ===")
+    }
+
+    private suspend fun runOpenEndedInference(imagePath: String): Pair<String, InferenceMetrics> = withContext(Dispatchers.IO) {
+        val wrapper = vlmWrapper ?: throw IllegalStateException("Model not initialized")
+
+        val openPrompt = "Describe this image in detail. What objects, people, or activities do you see?"
+
+        val contents = listOf(
+            VlmContent("image", imagePath),
+            VlmContent("text", openPrompt)
+        )
+
+        val chatList = arrayListOf(VlmChatMessage("user", contents))
+        val chatArray = chatList.toTypedArray()
+
+        val templateResult = wrapper.applyChatTemplate(chatArray, null, false)
+        val formattedText = templateResult.getOrThrow().formattedText
+
+        val genConfig = GenerationConfig(
+            maxTokens = 512,
+            imagePaths = arrayOf(imagePath),
+            imageCount = 1
+        )
+
+        val responseBuilder = StringBuilder()
+        var firstTokenTime: Long? = null
+        var tokenCount = 0
+        val startTime = System.currentTimeMillis()
+
+        wrapper.generateStreamFlow(formattedText, genConfig).collect { result ->
+            when (result) {
+                is LlmStreamResult.Token -> {
+                    if (firstTokenTime == null) {
+                        firstTokenTime = System.currentTimeMillis()
+                    }
+                    responseBuilder.append(result.text)
+                    tokenCount++
+                }
+                is LlmStreamResult.Completed -> {
+                    Log.d(TAG, "Generation completed")
+                }
+                is LlmStreamResult.Error -> {
+                    throw RuntimeException("VLM generation error: ${result.throwable}")
+                }
+            }
+        }
+
+        val endTime = System.currentTimeMillis()
+        val totalTime = endTime - startTime
+        val ttft = (firstTokenTime ?: endTime) - startTime
+        val tps = if (totalTime > 0) tokenCount * 1000.0 / totalTime else 0.0
+
+        Pair(responseBuilder.toString(), InferenceMetrics(ttft, tokenCount, totalTime, tps))
     }
 
     private fun Double.format(decimals: Int): String = "%.${decimals}f".format(this)

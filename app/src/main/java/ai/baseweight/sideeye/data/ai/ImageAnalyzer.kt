@@ -1,6 +1,8 @@
 package ai.baseweight.sideeye.data.ai
 
 import android.content.Context
+import android.graphics.Bitmap
+import android.graphics.BitmapFactory
 import android.net.Uri
 import android.util.Log
 import com.nexa.sdk.NexaSdk
@@ -25,32 +27,31 @@ class ImageAnalyzer(private val context: Context) {
     companion object {
         private const val TAG = "ImageAnalyzer"
         private const val MODEL_NAME = "omni-neural"
+        private const val TARGET_SIZE = 448 // Required for NPU VLM
+        private const val REINIT_INTERVAL = 4 // Reinitialize model every N images to avoid NPU crashes
 
-        // Prompt for content analysis
-        private const val ANALYSIS_PROMPT = """Analyze this image for content moderation. Rate each category from 0 to 100 based on how likely the image contains that type of content. Use exactly this format:
+        // Prompt that works well with OmniNeural (from benchmark testing)
+        private const val ANALYSIS_PROMPT = """Classify this image. Pick ONE category:
 
-NUDITY: [score]
-DRINKING: [score]
-DRUGS: [score]
-EMBARRASSING: [score]
+0 = Safe (nothing inappropriate)
+1 = Nudity (visible breasts, genitals, buttocks)
+2 = Suggestive (bikinis, swimwear, revealing clothing)
+3 = Drugs (cannabis, marijuana, drug paraphernalia)
+4 = Embarrassing (drunk person, vomiting)
 
-Where [score] is a number from 0-100. 0 means definitely not present, 100 means definitely present.
-
-- NUDITY: exposed skin, revealing clothing, intimate content
-- DRINKING: alcohol bottles, glasses, drinking scenes
-- DRUGS: drug paraphernalia, pills, smoking materials
-- EMBARRASSING: unflattering poses, messy appearance, awkward situations
-
-Respond with ONLY the four lines in the exact format above."""
+First briefly describe what you see, then respond with the number.
+Format: "I see [description]. Category: [number]"
+Example: "I see a beach sunset. Category: 0"
+Example: "I see cannabis on a scale. Category: 3" """
     }
 
     private var vlmWrapper: VlmWrapper? = null
     private var isInitialized = false
     private var tempImageDir: File? = null
+    private var inferenceCount = 0
 
     /**
      * Initialize the VLM model. Must be called before analyze().
-     * This downloads the model if needed and loads it onto the NPU.
      */
     suspend fun initialize(): Boolean = withContext(Dispatchers.IO) {
         if (isInitialized && vlmWrapper != null) {
@@ -66,50 +67,71 @@ Respond with ONLY the four lines in the exact format above."""
                 if (!exists()) mkdirs()
             }
 
-            // Get model directory
-            val downloader = ModelDownloader(context)
-            val modelDir = downloader.getModelDir(ModelDownloader.OMNINEURAL_MODEL_ID)
-
-            if (!modelDir.exists()) {
-                Log.e(TAG, "Model not downloaded. Please download first.")
-                return@withContext false
-            }
-
-            val config = ModelConfig(
-                nCtx = 2048,
-                nThreads = 8,
-                enable_thinking = false,
-                npu_lib_folder_path = context.applicationInfo.nativeLibraryDir,
-                npu_model_folder_path = modelDir.absolutePath
-            )
-
-            VlmWrapper.builder()
-                .vlmCreateInput(
-                    VlmCreateInput(
-                        model_name = MODEL_NAME,
-                        model_path = File(modelDir, "files-1-1.nexa").absolutePath,
-                        mmproj_path = null,
-                        config = config,
-                        plugin_id = "npu"
-                    )
-                )
-                .build()
-                .onSuccess { wrapper ->
-                    vlmWrapper = wrapper
-                    isInitialized = true
-                    Log.d(TAG, "ImageAnalyzer initialized successfully")
-                }
-                .onFailure { error ->
-                    Log.e(TAG, "Failed to initialize model", error)
-                    isInitialized = false
-                }
-
-            isInitialized
+            initializeModel()
         } catch (e: Exception) {
             Log.e(TAG, "Exception during initialization", e)
             isInitialized = false
             false
         }
+    }
+
+    private suspend fun initializeModel(): Boolean {
+        // Get model directory
+        val downloader = ModelDownloader(context)
+        val modelDir = downloader.getModelDir(ModelDownloader.OMNINEURAL_MODEL_ID)
+
+        if (!modelDir.exists()) {
+            Log.e(TAG, "Model not downloaded. Please download first.")
+            return false
+        }
+
+        val config = ModelConfig(
+            nCtx = 2048,
+            nThreads = 8,
+            enable_thinking = false,
+            npu_lib_folder_path = context.applicationInfo.nativeLibraryDir,
+            npu_model_folder_path = modelDir.absolutePath
+        )
+
+        var success = false
+        VlmWrapper.builder()
+            .vlmCreateInput(
+                VlmCreateInput(
+                    model_name = MODEL_NAME,
+                    model_path = File(modelDir, "files-1-1.nexa").absolutePath,
+                    mmproj_path = null,
+                    config = config,
+                    plugin_id = "npu"
+                )
+            )
+            .build()
+            .onSuccess { wrapper ->
+                vlmWrapper = wrapper
+                isInitialized = true
+                inferenceCount = 0
+                success = true
+                Log.d(TAG, "ImageAnalyzer initialized successfully")
+            }
+            .onFailure { error ->
+                Log.e(TAG, "Failed to initialize model", error)
+                isInitialized = false
+            }
+
+        return success
+    }
+
+    /**
+     * Release and reinitialize the model. Required every few images to avoid NPU crashes.
+     */
+    private suspend fun reinitializeModel() {
+        Log.d(TAG, "Reinitializing model after $inferenceCount inferences...")
+        vlmWrapper?.let { wrapper ->
+            wrapper.stopStream()
+            wrapper.destroy()
+        }
+        vlmWrapper = null
+        isInitialized = false
+        initializeModel()
     }
 
     /**
@@ -119,12 +141,6 @@ Respond with ONLY the four lines in the exact format above."""
 
     /**
      * Analyze an image for content moderation flags.
-     *
-     * @param imageUri URI of the image to analyze
-     * @param imageId Unique ID for this image (used in result)
-     * @param enabledCategories Which categories to check (scores for disabled categories will be 0)
-     * @param threshold Minimum confidence to flag (0.0-1.0)
-     * @return AnalysisResult with confidence scores for each category
      */
     suspend fun analyze(
         imageUri: Uri,
@@ -134,47 +150,53 @@ Respond with ONLY the four lines in the exact format above."""
     ): AnalysisResult = withContext(Dispatchers.IO) {
         check(isInitialized && vlmWrapper != null) { "Model not initialized. Call initialize() first." }
 
+        // Reinitialize model periodically to avoid NPU crashes
+        if (inferenceCount > 0 && inferenceCount % REINIT_INTERVAL == 0) {
+            reinitializeModel()
+        }
+
         val startTime = System.currentTimeMillis()
 
         try {
-            // Copy URI to temp file
+            // Copy URI to temp file and resize to 448x448
             val tempFile = File(tempImageDir, "analyze_${System.currentTimeMillis()}.jpg")
-            context.contentResolver.openInputStream(imageUri)?.use { input ->
-                FileOutputStream(tempFile).use { output ->
-                    input.copyTo(output)
-                }
-            } ?: throw IllegalArgumentException("Failed to open URI: $imageUri")
+            prepareImage(imageUri, tempFile)
 
             // Run inference
-            val response = runInference(tempFile.absolutePath, ANALYSIS_PROMPT)
+            val response = runInference(tempFile.absolutePath)
+            inferenceCount++
 
             // Clean up temp file
             tempFile.delete()
 
-            // Parse response into scores
-            val scores = parseResponse(response, enabledCategories)
+            // Parse response
+            val (isFlagged, category) = parseResponse(response)
 
             val analysisTimeMs = System.currentTimeMillis() - startTime
 
-            // Determine if flagged and primary flag
-            val flaggedScores = scores.filter { it.value >= threshold }
-            val isFlagged = flaggedScores.isNotEmpty()
-            val primaryEntry = scores.maxByOrNull { it.value }
-            val primaryFlag = if (isFlagged) primaryEntry?.key else null
-            val primaryConfidence = primaryEntry?.value ?: 0f
+            // Map category to FlagCategory
+            val primaryFlag = category?.let { mapToFlagCategory(it) }
+
+            // Check if the detected category is enabled
+            val effectivelyFlagged = isFlagged && (primaryFlag == null || primaryFlag in enabledCategories)
+
+            // Build flags map
+            val flags = mutableMapOf<FlagCategory, Float>()
+            if (primaryFlag != null && effectivelyFlagged) {
+                flags[primaryFlag] = 1.0f // Model gives binary classification
+            }
 
             AnalysisResult(
                 imageId = imageId,
-                flags = scores,
-                isFlagged = isFlagged,
-                primaryFlag = primaryFlag,
-                primaryConfidence = primaryConfidence,
+                flags = flags,
+                isFlagged = effectivelyFlagged,
+                primaryFlag = if (effectivelyFlagged) primaryFlag else null,
+                primaryConfidence = if (effectivelyFlagged) 1.0f else 0f,
                 analysisTimeMs = analysisTimeMs
             )
         } catch (e: Exception) {
             Log.e(TAG, "Analysis failed", e)
             val analysisTimeMs = System.currentTimeMillis() - startTime
-            // Return empty result on error
             AnalysisResult(
                 imageId = imageId,
                 flags = emptyMap(),
@@ -186,29 +208,87 @@ Respond with ONLY the four lines in the exact format above."""
         }
     }
 
-    private suspend fun runInference(imagePath: String, prompt: String): String {
+    /**
+     * Prepare image: copy from URI and resize to 448x448 for NPU compatibility.
+     */
+    private fun prepareImage(uri: Uri, destFile: File) {
+        // Load bitmap from URI
+        val inputStream = context.contentResolver.openInputStream(uri)
+            ?: throw IllegalArgumentException("Failed to open URI: $uri")
+
+        val options = BitmapFactory.Options().apply {
+            inJustDecodeBounds = true
+        }
+
+        // First pass to get dimensions
+        inputStream.use { BitmapFactory.decodeStream(it, null, options) }
+
+        // Calculate sample size for efficiency
+        options.inSampleSize = calculateInSampleSize(options, TARGET_SIZE, TARGET_SIZE)
+        options.inJustDecodeBounds = false
+
+        // Reopen stream and decode
+        val inputStream2 = context.contentResolver.openInputStream(uri)
+            ?: throw IllegalArgumentException("Failed to open URI: $uri")
+
+        val bitmap = inputStream2.use { BitmapFactory.decodeStream(it, null, options) }
+            ?: throw IllegalArgumentException("Failed to decode image: $uri")
+
+        // Resize to exact target size
+        val resizedBitmap = Bitmap.createScaledBitmap(bitmap, TARGET_SIZE, TARGET_SIZE, true)
+        if (resizedBitmap != bitmap) {
+            bitmap.recycle()
+        }
+
+        // Save as JPEG
+        FileOutputStream(destFile).use { out ->
+            resizedBitmap.compress(Bitmap.CompressFormat.JPEG, 95, out)
+        }
+        resizedBitmap.recycle()
+
+        Log.d(TAG, "Prepared image: ${destFile.absolutePath} (${TARGET_SIZE}x${TARGET_SIZE})")
+    }
+
+    private fun calculateInSampleSize(options: BitmapFactory.Options, reqWidth: Int, reqHeight: Int): Int {
+        val (height, width) = options.outHeight to options.outWidth
+        var inSampleSize = 1
+        if (height > reqHeight || width > reqWidth) {
+            val halfHeight = height / 2
+            val halfWidth = width / 2
+            while ((halfHeight / inSampleSize) >= reqHeight && (halfWidth / inSampleSize) >= reqWidth) {
+                inSampleSize *= 2
+            }
+        }
+        return inSampleSize
+    }
+
+    private suspend fun runInference(imagePath: String): String {
         val wrapper = vlmWrapper ?: throw IllegalStateException("VlmWrapper is null")
 
+        // Build message with image and prompt
         val contents = listOf(
             VlmContent("image", imagePath),
-            VlmContent("text", prompt)
+            VlmContent("text", ANALYSIS_PROMPT)
         )
 
-        val message = VlmChatMessage(
-            role = "user",
-            contents = contents
+        val chatList = arrayListOf(VlmChatMessage("user", contents))
+        val chatArray = chatList.toTypedArray()
+
+        // Apply chat template
+        val templateResult = wrapper.applyChatTemplate(chatArray, null, false)
+        val formattedText = templateResult.getOrThrow().formattedText
+
+        // Create config with imagePaths directly (required for NPU)
+        val genConfig = GenerationConfig(
+            maxTokens = 256,
+            imagePaths = arrayOf(imagePath),
+            imageCount = 1
         )
-
-        val messageArray = arrayOf(message)
-
-        // Inject media paths into generation config
-        val baseConfig = GenerationConfig()
-        val configWithMedia = wrapper.injectMediaPathsToConfig(messageArray, baseConfig)
 
         // Collect streaming response
         val responseBuilder = StringBuilder()
 
-        wrapper.generateStreamFlow(prompt, configWithMedia).collect { result ->
+        wrapper.generateStreamFlow(formattedText, genConfig).collect { result ->
             when (result) {
                 is LlmStreamResult.Token -> {
                     responseBuilder.append(result.text)
@@ -217,47 +297,50 @@ Respond with ONLY the four lines in the exact format above."""
                     Log.d(TAG, "Generation completed")
                 }
                 is LlmStreamResult.Error -> {
-                    Log.e(TAG, "Generation error")
-                    throw RuntimeException("VLM generation error")
+                    Log.e(TAG, "Generation error: ${result.throwable}")
+                    throw RuntimeException("VLM generation error: ${result.throwable}")
                 }
             }
         }
+
+        // Clear pending state
+        wrapper.stopStream()
 
         return responseBuilder.toString()
     }
 
-    private fun parseResponse(
-        response: String,
-        enabledCategories: Set<FlagCategory>
-    ): Map<FlagCategory, Float> {
-        val scores = mutableMapOf<FlagCategory, Float>()
+    /**
+     * Parse response in "Category: X" format.
+     * Returns (isFlagged, categoryName)
+     */
+    private fun parseResponse(response: String): Pair<Boolean, String?> {
+        val categoryRegex = """Category:\s*(\d)""".toRegex(RegexOption.IGNORE_CASE)
+        val match = categoryRegex.find(response)
 
-        // Initialize all enabled categories to 0
-        enabledCategories.forEach { scores[it] = 0f }
-
-        // Parse each line for scores
-        val lines = response.uppercase().lines()
-
-        for (category in enabledCategories) {
-            val categoryName = category.name
-            val matchingLine = lines.find { it.startsWith("$categoryName:") }
-
-            if (matchingLine != null) {
-                // Extract number from line like "NUDITY: 85" or "NUDITY: [85]"
-                val numberMatch = Regex("""[\[\s]*(\d+)[\]\s]*""").find(
-                    matchingLine.substringAfter(":")
-                )
-                val scoreValue = numberMatch?.groupValues?.get(1)?.toFloatOrNull()
-
-                if (scoreValue != null) {
-                    // Convert 0-100 to 0.0-1.0
-                    scores[category] = (scoreValue / 100f).coerceIn(0f, 1f)
-                }
+        if (match != null) {
+            val category = match.groupValues[1].toIntOrNull() ?: 0
+            return when (category) {
+                0 -> Pair(false, null)  // Safe
+                1 -> Pair(true, "Nudity")
+                2 -> Pair(true, "Suggestive")
+                3 -> Pair(true, "Drugs")
+                4 -> Pair(true, "Embarrassing")
+                else -> Pair(false, null)
             }
         }
 
-        Log.d(TAG, "Parsed scores: $scores from response: $response")
-        return scores
+        Log.w(TAG, "Could not parse category from response: $response")
+        return Pair(false, null)
+    }
+
+    private fun mapToFlagCategory(categoryName: String): FlagCategory? {
+        return when (categoryName.uppercase()) {
+            "NUDITY" -> FlagCategory.NUDITY
+            "SUGGESTIVE" -> FlagCategory.SUGGESTIVE
+            "DRUGS" -> FlagCategory.DRUGS
+            "EMBARRASSING" -> FlagCategory.EMBARRASSING
+            else -> null
+        }
     }
 
     /**
@@ -273,6 +356,7 @@ Respond with ONLY the four lines in the exact format above."""
                 }
                 vlmWrapper = null
                 isInitialized = false
+                inferenceCount = 0
 
                 tempImageDir?.deleteRecursively()
                 tempImageDir = null

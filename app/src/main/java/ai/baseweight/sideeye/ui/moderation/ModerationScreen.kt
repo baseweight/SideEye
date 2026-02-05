@@ -17,6 +17,7 @@ import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.Lock
+import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.CircularProgressIndicator
@@ -89,10 +90,16 @@ fun ModerationScreen(
                     )
                 }
                 !uiState.hasMoreItems && uiState.flaggedQueue.isEmpty() -> {
-                    EmptyContent(isAfterScan = uiState.processedCount > 0 || uiState.totalToScan > 0)
+                    EmptyContent(
+                        isAfterScan = uiState.processedCount > 0 || uiState.totalToScan > 0,
+                        onDone = onBackClick
+                    )
                 }
                 !uiState.hasMoreItems -> {
-                    CompletedContent(processedCount = uiState.processedCount)
+                    CompletedContent(
+                        processedCount = uiState.processedCount,
+                        onDone = onBackClick
+                    )
                 }
                 else -> {
                     SwipeContent(
@@ -154,7 +161,10 @@ private fun ScanningContent(
 }
 
 @Composable
-private fun EmptyContent(isAfterScan: Boolean) {
+private fun EmptyContent(
+    isAfterScan: Boolean,
+    onDone: () -> Unit
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -162,6 +172,13 @@ private fun EmptyContent(isAfterScan: Boolean) {
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
+        Icon(
+            imageVector = Icons.Default.Check,
+            contentDescription = null,
+            modifier = Modifier.size(64.dp),
+            tint = MaterialTheme.colorScheme.primary
+        )
+        Spacer(modifier = Modifier.height(24.dp))
         Text(
             text = if (isAfterScan) "All Clear!" else "No Photos to Review",
             style = MaterialTheme.typography.headlineSmall,
@@ -178,11 +195,18 @@ private fun EmptyContent(isAfterScan: Boolean) {
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        Spacer(modifier = Modifier.height(32.dp))
+        Button(onClick = onDone) {
+            Text("Back to Gallery")
+        }
     }
 }
 
 @Composable
-private fun CompletedContent(processedCount: Int) {
+private fun CompletedContent(
+    processedCount: Int,
+    onDone: () -> Unit
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -209,6 +233,10 @@ private fun CompletedContent(processedCount: Int) {
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant
         )
+        Spacer(modifier = Modifier.height(32.dp))
+        Button(onClick = onDone) {
+            Text("Back to Gallery")
+        }
     }
 }
 

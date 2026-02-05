@@ -7,6 +7,7 @@ import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import ai.baseweight.sideeye.data.GalleryImage
+import ai.baseweight.sideeye.data.OnboardingManager
 import ai.baseweight.sideeye.data.ai.AnalysisResult
 import ai.baseweight.sideeye.data.ai.FlagCategory
 import ai.baseweight.sideeye.data.ai.ImageAnalyzer
@@ -69,6 +70,7 @@ class ModerationViewModel(application: Application) : AndroidViewModel(applicati
     private val downloader = ModelDownloader(application)
     private val analyzer = ImageAnalyzer(application)
     private val vaultRepository = VaultRepository(application)
+    private val onboardingManager = OnboardingManager(application)
 
     init {
         loadSettings()
@@ -93,6 +95,11 @@ class ModerationViewModel(application: Application) : AndroidViewModel(applicati
             current.enabledCategories + category
         }
         updateSettings(current.copy(enabledCategories = newCategories))
+    }
+
+    fun updateEnabledCategories(categories: Set<FlagCategory>) {
+        val current = _uiState.value.settings
+        updateSettings(current.copy(enabledCategories = categories))
     }
 
     fun updateSensitivity(threshold: Float) {
@@ -171,7 +178,10 @@ class ModerationViewModel(application: Application) : AndroidViewModel(applicati
         }
     }
 
-    fun startScan() {
+    /**
+     * Start scanning images. If scanNewOnly is true, only scans images added since last scan.
+     */
+    fun startScan(scanNewOnly: Boolean = true) {
         if (_uiState.value.isScanning || !_uiState.value.isModelReady) return
 
         viewModelScope.launch(Dispatchers.IO) {
@@ -186,7 +196,13 @@ class ModerationViewModel(application: Application) : AndroidViewModel(applicati
                 )
             }
 
-            val images = queryAllImages()
+            val lastScanTimestamp = if (scanNewOnly) {
+                onboardingManager.getLastScanTimestamp()
+            } else {
+                0L
+            }
+
+            val images = queryImages(sinceTimestamp = lastScanTimestamp)
             _uiState.update { it.copy(totalToScan = images.size) }
 
             if (images.isEmpty()) {
@@ -222,11 +238,20 @@ class ModerationViewModel(application: Application) : AndroidViewModel(applicati
                 }
             }
 
+            // Update last scan timestamp after successful scan
+            onboardingManager.updateLastScanTimestamp()
+
             _uiState.update { it.copy(isScanning = false) }
         }
     }
 
-    private fun queryAllImages(): List<GalleryImage> {
+    fun getLastScanTimestamp(): Long = onboardingManager.getLastScanTimestamp()
+
+    /**
+     * Query images from MediaStore, optionally filtering to those added after a timestamp.
+     * @param sinceTimestamp Only return images added after this timestamp (seconds since epoch). 0 means all images.
+     */
+    private fun queryImages(sinceTimestamp: Long = 0L): List<GalleryImage> {
         val images = mutableListOf<GalleryImage>()
         val context = getApplication<Application>()
 
@@ -237,13 +262,23 @@ class ModerationViewModel(application: Application) : AndroidViewModel(applicati
             MediaStore.Images.Media.SIZE
         )
 
+        // Filter by timestamp if provided (DATE_ADDED is in seconds)
+        val selection = if (sinceTimestamp > 0L) {
+            "${MediaStore.Images.Media.DATE_ADDED} > ?"
+        } else null
+
+        val selectionArgs = if (sinceTimestamp > 0L) {
+            // Convert from millis to seconds for MediaStore
+            arrayOf((sinceTimestamp / 1000).toString())
+        } else null
+
         val sortOrder = "${MediaStore.Images.Media.DATE_ADDED} DESC"
 
         context.contentResolver.query(
             MediaStore.Images.Media.EXTERNAL_CONTENT_URI,
             projection,
-            null,
-            null,
+            selection,
+            selectionArgs,
             sortOrder
         )?.use { cursor ->
             val idColumn = cursor.getColumnIndexOrThrow(MediaStore.Images.Media._ID)

@@ -17,6 +17,12 @@ import ai.baseweight.sideeye.ui.gallery.GalleryScreen
 import ai.baseweight.sideeye.ui.moderation.ModerationScreen
 import ai.baseweight.sideeye.ui.moderation.ModerationSettingsScreen
 import ai.baseweight.sideeye.ui.moderation.ModerationViewModel
+import ai.baseweight.sideeye.ui.onboarding.CategoriesScreen
+import ai.baseweight.sideeye.ui.onboarding.ModelDownloadScreen
+import ai.baseweight.sideeye.ui.onboarding.OnboardingViewModel
+import ai.baseweight.sideeye.ui.onboarding.PermissionsScreen
+import ai.baseweight.sideeye.ui.onboarding.VaultSetupScreen
+import ai.baseweight.sideeye.ui.onboarding.WelcomeScreen
 import ai.baseweight.sideeye.ui.theme.SideEyeTheme
 import ai.baseweight.sideeye.ui.vault.VaultAuthScreen
 import ai.baseweight.sideeye.ui.vault.VaultScreen
@@ -36,6 +42,14 @@ class MainActivity : FragmentActivity() {
 }
 
 object NavRoutes {
+    // Onboarding
+    const val WELCOME = "welcome"
+    const val MODEL_DOWNLOAD = "model_download"
+    const val PERMISSIONS = "permissions"
+    const val VAULT_SETUP = "vault_setup"
+    const val CATEGORIES = "categories"
+
+    // Main app
     const val GALLERY = "gallery"
     const val VAULT_AUTH = "vault_auth"
     const val VAULT = "vault"
@@ -49,6 +63,10 @@ fun SideEyeApp(
     activity: FragmentActivity,
     navController: NavHostController = rememberNavController()
 ) {
+    // Onboarding ViewModel
+    val onboardingViewModel: OnboardingViewModel = viewModel()
+    val onboardingState by onboardingViewModel.uiState.collectAsState()
+
     // Share VaultViewModel across vault-related screens
     val vaultViewModel: VaultViewModel = viewModel()
     val vaultUiState by vaultViewModel.uiState.collectAsState()
@@ -56,10 +74,78 @@ fun SideEyeApp(
     // Share ModerationViewModel across moderation screens
     val moderationViewModel: ModerationViewModel = viewModel()
 
+    // Determine start destination based on onboarding status
+    val startDestination = if (onboardingViewModel.isOnboardingComplete()) {
+        NavRoutes.GALLERY
+    } else {
+        NavRoutes.WELCOME
+    }
+
     NavHost(
         navController = navController,
-        startDestination = NavRoutes.GALLERY
+        startDestination = startDestination
     ) {
+        // Onboarding screens
+        composable(NavRoutes.WELCOME) {
+            WelcomeScreen(
+                onGetStarted = {
+                    navController.navigate(NavRoutes.MODEL_DOWNLOAD)
+                }
+            )
+        }
+
+        composable(NavRoutes.MODEL_DOWNLOAD) {
+            ModelDownloadScreen(
+                isDownloading = onboardingState.isModelDownloading,
+                downloadProgress = onboardingState.modelDownloadProgress,
+                downloadError = onboardingState.modelDownloadError,
+                isDownloaded = onboardingState.isModelDownloaded,
+                isOnWifi = onboardingViewModel.isOnWifi(),
+                onDownload = { onboardingViewModel.downloadModel() },
+                onContinue = {
+                    navController.navigate(NavRoutes.PERMISSIONS)
+                }
+            )
+        }
+
+        composable(NavRoutes.PERMISSIONS) {
+            PermissionsScreen(
+                onPermissionsGranted = { onboardingViewModel.markPermissionsGranted() },
+                onContinue = {
+                    navController.navigate(NavRoutes.VAULT_SETUP)
+                }
+            )
+        }
+
+        composable(NavRoutes.VAULT_SETUP) {
+            VaultSetupScreen(
+                onSetupComplete = { pin ->
+                    vaultViewModel.setupPin(pin)
+                    onboardingViewModel.markVaultSetup()
+                    navController.navigate(NavRoutes.CATEGORIES)
+                },
+                onSkip = {
+                    navController.navigate(NavRoutes.CATEGORIES)
+                }
+            )
+        }
+
+        composable(NavRoutes.CATEGORIES) {
+            CategoriesScreen(
+                enabledCategories = onboardingState.enabledCategories,
+                onToggleCategory = { onboardingViewModel.toggleCategory(it) },
+                onComplete = {
+                    onboardingViewModel.completeOnboarding()
+                    // Save categories to moderation settings
+                    moderationViewModel.updateEnabledCategories(onboardingState.enabledCategories)
+                    navController.navigate(NavRoutes.GALLERY) {
+                        popUpTo(NavRoutes.WELCOME) { inclusive = true }
+                    }
+                }
+            )
+        }
+
+        // Main app screens
         composable(NavRoutes.GALLERY) {
             GalleryScreen(
                 onNavigateToVault = {
@@ -158,7 +244,8 @@ fun SideEyeApp(
             ModerationScreen(
                 viewModel = moderationViewModel,
                 onBackClick = {
-                    navController.popBackStack()
+                    // Navigate back to Gallery, clearing moderation screens from stack
+                    navController.popBackStack(NavRoutes.GALLERY, inclusive = false)
                 }
             )
         }

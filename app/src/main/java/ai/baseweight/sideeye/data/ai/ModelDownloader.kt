@@ -56,16 +56,13 @@ class ModelDownloader(private val context: Context) {
 
     /**
      * Check if a model is already downloaded.
+     * Uses a .download_complete marker file to distinguish partial from complete downloads.
      */
     fun isModelDownloaded(modelId: String): Boolean {
         val modelDir = getModelDir(modelId)
         if (!modelDir.exists()) return false
 
-        // Check for manifest file or known model file
-        val manifestFile = File(modelDir, "nexa_manifest.json")
-        val nexaFile = modelDir.listFiles()?.any { it.extension == "nexa" } ?: false
-
-        return manifestFile.exists() || nexaFile
+        return File(modelDir, ".download_complete").exists()
     }
 
     /**
@@ -169,6 +166,9 @@ class ModelDownloader(private val context: Context) {
                     return@channelFlow
                 }
             }
+
+            // Write completion marker
+            File(modelDir, ".download_complete").writeText("done")
 
             send(DownloadState.Completed(modelDir))
 

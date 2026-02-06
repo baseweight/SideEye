@@ -1,5 +1,11 @@
 package ai.baseweight.sideeye.ui.moderation
 
+import android.app.Activity
+import android.os.Build
+import android.provider.MediaStore
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.IntentSenderRequest
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -31,6 +37,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -52,6 +59,27 @@ fun ModerationScreen(
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
+
+    // Launcher for system delete confirmation (Android 11+)
+    val deleteLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.StartIntentSenderForResult()
+    ) { result ->
+        viewModel.onDeleteResult(result.resultCode == Activity.RESULT_OK)
+    }
+
+    // When the ViewModel requests a system delete, launch it
+    LaunchedEffect(uiState.pendingDeleteUri) {
+        val uri = uiState.pendingDeleteUri ?: return@LaunchedEffect
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
+            val deleteRequest = MediaStore.createDeleteRequest(
+                context.contentResolver,
+                listOf(uri)
+            )
+            deleteLauncher.launch(
+                IntentSenderRequest.Builder(deleteRequest.intentSender).build()
+            )
+        }
+    }
 
     Scaffold(
         topBar = {

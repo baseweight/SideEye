@@ -10,10 +10,14 @@ import androidx.compose.runtime.getValue
 import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.viewmodel.compose.viewModel
 import androidx.navigation.NavHostController
+import androidx.navigation.NavType
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
+import androidx.navigation.navArgument
 import ai.baseweight.sideeye.ui.gallery.GalleryScreen
+import ai.baseweight.sideeye.ui.gallery.GalleryViewModel
+import ai.baseweight.sideeye.ui.gallery.ImageViewerScreen
 import ai.baseweight.sideeye.ui.moderation.ModerationScreen
 import ai.baseweight.sideeye.ui.moderation.ModerationSettingsScreen
 import ai.baseweight.sideeye.ui.moderation.ModerationViewModel
@@ -56,6 +60,7 @@ object NavRoutes {
     const val VAULT_SETTINGS = "vault_settings"
     const val MODERATION_SETTINGS = "moderation_settings"
     const val MODERATION = "moderation"
+    const val IMAGE_VIEWER = "image_viewer/{imageId}"
 }
 
 @Composable
@@ -70,6 +75,9 @@ fun SideEyeApp(
     // Share VaultViewModel across vault-related screens
     val vaultViewModel: VaultViewModel = viewModel()
     val vaultUiState by vaultViewModel.uiState.collectAsState()
+
+    // Share GalleryViewModel across gallery and image viewer screens
+    val galleryViewModel: GalleryViewModel = viewModel()
 
     // Share ModerationViewModel across moderation screens
     val moderationViewModel: ModerationViewModel = viewModel()
@@ -148,6 +156,10 @@ fun SideEyeApp(
         // Main app screens
         composable(NavRoutes.GALLERY) {
             GalleryScreen(
+                viewModel = galleryViewModel,
+                onNavigateToImageViewer = { imageId ->
+                    navController.navigate("image_viewer/$imageId")
+                },
                 onNavigateToVault = {
                     // Check if authentication is needed
                     if (vaultViewModel.needsFirstTimeSetup()) {
@@ -165,6 +177,18 @@ fun SideEyeApp(
                 onNavigateToSmartScan = {
                     navController.navigate(NavRoutes.MODERATION_SETTINGS)
                 }
+            )
+        }
+
+        composable(
+            NavRoutes.IMAGE_VIEWER,
+            arguments = listOf(navArgument("imageId") { type = NavType.LongType })
+        ) { backStackEntry ->
+            val imageId = backStackEntry.arguments?.getLong("imageId") ?: return@composable
+            ImageViewerScreen(
+                viewModel = galleryViewModel,
+                imageId = imageId,
+                onNavigateBack = { navController.popBackStack() }
             )
         }
 

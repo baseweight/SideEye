@@ -2,6 +2,7 @@ package ai.baseweight.sideeye.ui.gallery
 
 import android.app.Application
 import android.content.ContentUris
+import android.net.Uri
 import android.provider.MediaStore
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
@@ -208,4 +209,35 @@ class GalleryViewModel(application: Application) : AndroidViewModel(application)
     }
 
     fun getSelectedCount(): Int = _uiState.value.selectedImages.size
+
+    fun deleteImage(image: GalleryImage) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val context = getApplication<Application>()
+            try {
+                context.contentResolver.delete(image.uri, null, null)
+            } catch (e: Exception) {
+                e.printStackTrace()
+            }
+            loadImages()
+        }
+    }
+
+    fun moveImageToVault(image: GalleryImage, onDeleteRequired: ((Uri) -> Unit)? = null) {
+        viewModelScope.launch(Dispatchers.IO) {
+            val vaultImage = vaultRepository.addToVault(image.uri, image.displayName)
+            if (vaultImage != null && onDeleteRequired != null) {
+                kotlinx.coroutines.withContext(Dispatchers.Main) {
+                    onDeleteRequired(image.uri)
+                }
+            } else if (vaultImage != null) {
+                val context = getApplication<Application>()
+                try {
+                    context.contentResolver.delete(image.uri, null, null)
+                } catch (e: Exception) {
+                    e.printStackTrace()
+                }
+                loadImages()
+            }
+        }
+    }
 }

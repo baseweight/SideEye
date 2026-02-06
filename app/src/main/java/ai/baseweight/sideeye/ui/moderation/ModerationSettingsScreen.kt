@@ -30,6 +30,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
@@ -45,6 +46,10 @@ fun ModerationSettingsScreen(
     onStartScan: () -> Unit
 ) {
     val uiState by viewModel.uiState.collectAsState()
+
+    LaunchedEffect(Unit) {
+        viewModel.checkModelStatus()
+    }
 
     Scaffold(
         topBar = {
@@ -190,12 +195,14 @@ fun ModerationSettingsScreen(
 
             Spacer(modifier = Modifier.weight(1f))
 
-            // Start Scan Button
+            // Start Scan / Resume Queue Button
             Button(
                 onClick = {
-                    if (uiState.isModelReady) {
+                    if (uiState.isModelReady && uiState.hasMoreItems) {
+                        // Resume existing queue
+                        onStartScan()
+                    } else if (uiState.isModelReady) {
                         viewModel.startScan()
-                        // Navigate to moderation screen when scan starts
                         onStartScan()
                     } else if (uiState.isModelDownloaded && !uiState.isModelLoading) {
                         viewModel.initializeModel()
@@ -222,6 +229,7 @@ fun ModerationSettingsScreen(
                     text = when {
                         !uiState.isModelDownloaded -> "Download AI Model"
                         !uiState.isModelReady -> "Load AI Model"
+                        uiState.hasMoreItems -> "Resume Queue (${uiState.remainingCount} remaining)"
                         else -> "Start Smart Scan"
                     }
                 )

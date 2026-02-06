@@ -72,7 +72,8 @@ import ai.baseweight.sideeye.data.GalleryImage
 fun GalleryScreen(
     viewModel: GalleryViewModel = viewModel(),
     onNavigateToVault: () -> Unit = {},
-    onNavigateToSmartScan: () -> Unit = {}
+    onNavigateToSmartScan: () -> Unit = {},
+    onNavigateToImageViewer: (Long) -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
@@ -213,7 +214,7 @@ fun GalleryScreen(
                             if (uiState.isSelectionMode) {
                                 viewModel.toggleImageSelection(image.id)
                             } else {
-                                viewModel.selectImage(image)
+                                onNavigateToImageViewer(image.id)
                             }
                         },
                         onImageLongClick = { image ->

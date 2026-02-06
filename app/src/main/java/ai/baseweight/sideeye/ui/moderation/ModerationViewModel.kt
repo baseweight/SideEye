@@ -2,6 +2,7 @@ package ai.baseweight.sideeye.ui.moderation
 
 import android.app.Application
 import android.content.ContentUris
+import android.net.Uri
 import android.provider.MediaStore
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
@@ -46,7 +47,8 @@ data class ModerationUiState(
 
     // Actions
     val isProcessingAction: Boolean = false,
-    val lastActionError: String? = null
+    val lastActionError: String? = null,
+    val pendingDeleteUri: Uri? = null
 ) {
     val currentItem: Pair<GalleryImage, AnalysisResult>?
         get() = flaggedQueue.getOrNull(currentIndex)
@@ -107,7 +109,7 @@ class ModerationViewModel(application: Application) : AndroidViewModel(applicati
         updateSettings(current.copy(sensitivityThreshold = threshold))
     }
 
-    private fun checkModelStatus() {
+    fun checkModelStatus() {
         val isDownloaded = downloader.isModelDownloaded(ModelDownloader.OMNINEURAL_MODEL_ID)
         _uiState.update { it.copy(isModelDownloaded = isDownloaded) }
     }
@@ -206,6 +208,7 @@ class ModerationViewModel(application: Application) : AndroidViewModel(applicati
             _uiState.update { it.copy(totalToScan = images.size) }
 
             if (images.isEmpty()) {
+                onboardingManager.updateLastScanTimestamp()
                 _uiState.update { it.copy(isScanning = false) }
                 return@launch
             }
@@ -238,8 +241,10 @@ class ModerationViewModel(application: Application) : AndroidViewModel(applicati
                 }
             }
 
-            // Update last scan timestamp after successful scan
-            onboardingManager.updateLastScanTimestamp()
+            // If nothing was flagged, the scan is fully complete
+            if (flagged.isEmpty()) {
+                onboardingManager.updateLastScanTimestamp()
+            }
 
             _uiState.update { it.copy(isScanning = false) }
         }
@@ -317,24 +322,33 @@ class ModerationViewModel(application: Application) : AndroidViewModel(applicati
         val current = _uiState.value.currentItem ?: return
         if (_uiState.value.isProcessingAction) return
 
-        viewModelScope.launch(Dispatchers.IO) {
-            _uiState.update { it.copy(isProcessingAction = true, lastActionError = null) }
-
-            try {
-                val context = getApplication<Application>()
-                val deleted = context.contentResolver.delete(current.first.uri, null, null)
-
-                if (deleted > 0) {
-                    moveToNext()
-                } else {
-                    _uiState.update { it.copy(lastActionError = "Failed to delete image") }
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            // On API 30+, emit URI for the UI to launch system delete dialog
+            _uiState.update { it.copy(pendingDeleteUri = current.first.uri) }
+        } else {
+            viewModelScope.launch(Dispatchers.IO) {
+                _uiState.update { it.copy(isProcessingAction = true, lastActionError = null) }
+                try {
+                    val context = getApplication<Application>()
+                    val deleted = context.contentResolver.delete(current.first.uri, null, null)
+                    if (deleted > 0) {
+                        moveToNext()
+                    } else {
+                        _uiState.update { it.copy(lastActionError = "Failed to delete image") }
+                    }
+                } catch (e: Exception) {
+                    Log.e(TAG, "Failed to delete image", e)
+                    _uiState.update { it.copy(lastActionError = "Error: ${e.message}") }
                 }
-            } catch (e: Exception) {
-                Log.e(TAG, "Failed to delete image", e)
-                _uiState.update { it.copy(lastActionError = "Error: ${e.message}") }
+                _uiState.update { it.copy(isProcessingAction = false) }
             }
+        }
+    }
 
-            _uiState.update { it.copy(isProcessingAction = false) }
+    fun onDeleteResult(success: Boolean) {
+        _uiState.update { it.copy(pendingDeleteUri = null) }
+        if (success) {
+            moveToNext()
         }
     }
 
@@ -376,8 +390,13 @@ class ModerationViewModel(application: Application) : AndroidViewModel(applicati
 
     private fun moveToNext() {
         _uiState.update {
+            val newIndex = it.currentIndex + 1
+            // Update scan timestamp only when entire queue is finished
+            if (newIndex >= it.flaggedQueue.size) {
+                onboardingManager.updateLastScanTimestamp()
+            }
             it.copy(
-                currentIndex = it.currentIndex + 1,
+                currentIndex = newIndex,
                 processedCount = it.processedCount + 1
             )
         }

@@ -85,4 +85,4 @@ app/src/main/java/ai/baseweight/sideeye/
 
 ## License
 
-Copyright 2024 Baseweight. All rights reserved.
+Copyright 2026 Baseweight. All rights reserved.

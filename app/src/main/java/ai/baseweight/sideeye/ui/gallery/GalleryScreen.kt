@@ -73,7 +73,8 @@ fun GalleryScreen(
     viewModel: GalleryViewModel = viewModel(),
     onNavigateToVault: () -> Unit = {},
     onNavigateToSmartScan: () -> Unit = {},
-    onNavigateToImageViewer: (Long) -> Unit = {}
+    onNavigateToImageViewer: (Long) -> Unit = {},
+    onNavigateToAbout: () -> Unit = {}
 ) {
     val uiState by viewModel.uiState.collectAsState()
     val context = LocalContext.current
@@ -168,6 +169,13 @@ fun GalleryScreen(
                                         }
                                     )
                                 }
+                                DropdownMenuItem(
+                                    text = { Text("About") },
+                                    onClick = {
+                                        showMenu = false
+                                        onNavigateToAbout()
+                                    }
+                                )
                             }
                         }
                     }

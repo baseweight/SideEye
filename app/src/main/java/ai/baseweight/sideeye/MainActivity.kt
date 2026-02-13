@@ -14,6 +14,7 @@ import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.navArgument
+import ai.baseweight.sideeye.ui.about.AboutScreen
 import ai.baseweight.sideeye.ui.gallery.GalleryScreen
 import ai.baseweight.sideeye.ui.gallery.GalleryViewModel
 import ai.baseweight.sideeye.ui.gallery.ImageViewerScreen
@@ -64,6 +65,7 @@ object NavRoutes {
     const val MODERATION_SETTINGS = "moderation_settings"
     const val MODERATION = "moderation"
     const val IMAGE_VIEWER = "image_viewer/{imageId}"
+    const val ABOUT = "about"
 }
 
 @Composable
@@ -188,6 +190,9 @@ fun SideEyeApp(
                 },
                 onNavigateToSmartScan = {
                     navController.navigate(NavRoutes.MODERATION_SETTINGS)
+                },
+                onNavigateToAbout = {
+                    navController.navigate(NavRoutes.ABOUT)
                 }
             )
         }
@@ -283,6 +288,12 @@ fun SideEyeApp(
                     // Navigate back to Gallery, clearing moderation screens from stack
                     navController.popBackStack(NavRoutes.GALLERY, inclusive = false)
                 }
+            )
+        }
+
+        composable(NavRoutes.ABOUT) {
+            AboutScreen(
+                onBackClick = { navController.popBackStack() }
             )
         }
     }

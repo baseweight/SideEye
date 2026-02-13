@@ -1,7 +1,6 @@
 package ai.baseweight.sideeye
 
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.compose.runtime.Composable
@@ -27,6 +26,7 @@ import ai.baseweight.sideeye.ui.onboarding.OnboardingViewModel
 import ai.baseweight.sideeye.ui.onboarding.PermissionsScreen
 import ai.baseweight.sideeye.ui.onboarding.VaultSetupScreen
 import ai.baseweight.sideeye.ui.onboarding.WelcomeScreen
+import ai.baseweight.sideeye.ui.splash.SplashScreen
 import ai.baseweight.sideeye.ui.theme.SideEyeTheme
 import ai.baseweight.sideeye.ui.vault.VaultAuthScreen
 import ai.baseweight.sideeye.ui.vault.VaultScreen
@@ -36,6 +36,7 @@ import ai.baseweight.sideeye.ui.vault.VaultViewModel
 class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        setTheme(R.style.Theme_SideEye)
         enableEdgeToEdge()
         setContent {
             SideEyeTheme {
@@ -46,6 +47,8 @@ class MainActivity : FragmentActivity() {
 }
 
 object NavRoutes {
+    const val SPLASH = "splash"
+
     // Onboarding
     const val WELCOME = "welcome"
     const val MODEL_DOWNLOAD = "model_download"
@@ -82,17 +85,26 @@ fun SideEyeApp(
     // Share ModerationViewModel across moderation screens
     val moderationViewModel: ModerationViewModel = viewModel()
 
-    // Determine start destination based on onboarding status
-    val startDestination = if (onboardingViewModel.isOnboardingComplete()) {
-        NavRoutes.GALLERY
-    } else {
-        NavRoutes.WELCOME
-    }
-
     NavHost(
         navController = navController,
-        startDestination = startDestination
+        startDestination = NavRoutes.SPLASH
     ) {
+        // Splash screen
+        composable(NavRoutes.SPLASH) {
+            SplashScreen(
+                onSplashComplete = {
+                    val destination = if (onboardingViewModel.isOnboardingComplete()) {
+                        NavRoutes.GALLERY
+                    } else {
+                        NavRoutes.WELCOME
+                    }
+                    navController.navigate(destination) {
+                        popUpTo(NavRoutes.SPLASH) { inclusive = true }
+                    }
+                }
+            )
+        }
+
         // Onboarding screens
         composable(NavRoutes.WELCOME) {
             WelcomeScreen(

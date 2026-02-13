@@ -31,6 +31,9 @@ class OnboardingNavigationTest {
 
     @Test
     fun onboarding_startsAtWelcomeScreen() {
+        // Wait for splash screen to finish and navigate to welcome
+        waitForSplashToComplete()
+
         // Verify we start at welcome screen
         composeTestRule.onNodeWithText("Welcome to SideEye").assertIsDisplayed()
         composeTestRule.onNodeWithText("Get Started").assertIsDisplayed()
@@ -38,6 +41,9 @@ class OnboardingNavigationTest {
 
     @Test
     fun onboarding_navigatesToModelDownload_fromWelcome() {
+        // Wait for splash screen to finish
+        waitForSplashToComplete()
+
         // Click Get Started
         composeTestRule.onNodeWithText("Get Started").performClick()
 
@@ -48,6 +54,9 @@ class OnboardingNavigationTest {
 
     @Test
     fun onboarding_navigatesToPermissions_fromModelDownload() {
+        // Wait for splash screen to finish
+        waitForSplashToComplete()
+
         // Navigate to model download
         composeTestRule.onNodeWithText("Get Started").performClick()
         composeTestRule.waitForIdle()
@@ -76,6 +85,9 @@ class OnboardingNavigationTest {
 
     @Test
     fun onboarding_navigatesToVaultSetup_fromPermissions() {
+        // Wait for splash screen to finish
+        waitForSplashToComplete()
+
         // Fast forward through first screens
         composeTestRule.onNodeWithText("Get Started").performClick()
         composeTestRule.waitForIdle()
@@ -102,6 +114,9 @@ class OnboardingNavigationTest {
 
     @Test
     fun onboarding_navigatesToCategories_fromVaultSetup_viaSkip() {
+        // Wait for splash screen to finish
+        waitForSplashToComplete()
+
         // Fast forward through first screens
         composeTestRule.onNodeWithText("Get Started").performClick()
         composeTestRule.waitForIdle()
@@ -128,6 +143,9 @@ class OnboardingNavigationTest {
 
     @Test
     fun onboarding_canSetPinAndContinue() {
+        // Wait for splash screen to finish
+        waitForSplashToComplete()
+
         // Fast forward through first screens
         composeTestRule.onNodeWithText("Get Started").performClick()
         composeTestRule.waitForIdle()
@@ -154,6 +172,15 @@ class OnboardingNavigationTest {
     }
 
     // Helper methods
+
+    private fun waitForSplashToComplete() {
+        // The splash screen shows for ~2.1 seconds before navigating.
+        // Wait until the Welcome screen text appears.
+        composeTestRule.waitUntil(timeoutMillis = 5000) {
+            composeTestRule.onAllNodesWithText("Welcome to SideEye")
+                .fetchSemanticsNodes().isNotEmpty()
+        }
+    }
 
     private fun skipModelDownloadScreen() {
         try {

@@ -1,6 +1,9 @@
 package ai.baseweight.sideeye.ui.onboarding
 
 import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.systemBars
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Tune
 import androidx.compose.material3.*
@@ -20,6 +23,7 @@ fun CategoriesScreen(
     Column(
         modifier = Modifier
             .fillMaxSize()
+            .windowInsetsPadding(WindowInsets.systemBars)
             .padding(32.dp),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {

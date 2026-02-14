@@ -143,6 +143,7 @@ fun SideEyeApp(
             VaultSetupScreen(
                 onSetupComplete = { pin ->
                     vaultViewModel.setupPin(pin)
+                    vaultViewModel.lockVault()
                     onboardingViewModel.markVaultSetup()
                     navController.navigate(NavRoutes.CATEGORIES)
                 },

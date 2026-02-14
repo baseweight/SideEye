@@ -40,6 +40,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -71,12 +72,18 @@ fun VaultScreen(
     var showDeleteDialog by remember { mutableStateOf(false) }
     var showRestoreDialog by remember { mutableStateOf(false) }
 
+    // Reload vault images when screen appears
+    LaunchedEffect(Unit) {
+        viewModel.loadVaultImages()
+    }
+
     // Update session activity on lifecycle events
     val lifecycleOwner = LocalLifecycleOwner.current
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 viewModel.updateSessionActivity()
+                viewModel.loadVaultImages()
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)

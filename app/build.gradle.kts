@@ -59,7 +59,7 @@ android {
 
 dependencies {
 
-    implementation("ai.nexa:core:0.0.20")
+    implementation("ai.nexa:core:0.0.24")
 
     // Image loading
     implementation("io.coil-kt:coil-compose:2.5.0")
